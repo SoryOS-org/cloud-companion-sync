@@ -14,6 +14,8 @@ export interface TerminalInstance {
   gitStatus: string;
   exitCode?: number;
   detectedPort?: number;
+  /** Set when this terminal is attached to a remote machine (e.g. "codespace:<name>"). */
+  remote?: string;
   activeProcess?: {
     pid: number;
     command: string;

@@ -4,6 +4,39 @@ import { ptyManager } from "@soryos/terminal";
 import { execInCodespace, codespaceWorkdir } from "@soryos/sandbox";
 import type { SessionData } from "@soryos/schema";
 
+
+type TermState = ReturnType<typeof ptyManager.getOrCreateSessionState>;
+type Term = NonNullable<ReturnType<TermState["terminals"]["get"]>>;
+
+/** Resolve a terminal id sent by the UI; fall back to the active terminal when unknown. */
+function resolveTerminal(state: TermState, terminalId?: string | null): Term | undefined {
+  return (terminalId ? state.terminals.get(terminalId) : undefined) ?? state.terminals.get(state.activeTerminalId);
+}
+
+function isCodespace(session: SessionData): boolean {
+  return session.providerId === "github-codespaces" && Boolean(session.codespaceId);
+}
+
+/** Attach every terminal of a Codespace session to the real remote machine (cwd /workspaces/<repo>). */
+function attachCodespace(session: SessionData, state: TermState) {
+  if (!isCodespace(session)) return;
+  const target = `codespace:${session.codespaceId}`;
+  const workdir = codespaceWorkdir(session.repository);
+  for (const term of state.terminals.values()) {
+    if (term.remote === target) continue;
+    term.remote = target;
+    term.cwd = workdir;
+    term.gitBranch = session.branch || term.gitBranch || "main";
+    term.gitStatus = "remote";
+    term.title = (session.repository || "codespace").split("/").pop() || "codespace";
+    term.buffer =
+      `\x1b[1;36mGitHub Codespace\x1b[0m ${session.codespaceId}\r\n` +
+      `Projet : \x1b[1;33m${session.repository || "?"}\x1b[0m (${term.gitBranch})\r\n` +
+      `Dossier : ${workdir}\r\n` +
+      `Les commandes s'exécutent sur la machine du Codespace (via gh codespace ssh).\r\n\r\n`;
+  }
+}
+
 /**
  * Gestion du terminal pour une session.
  * Utilise UNIQUEMENT @soryos/* - Aucune logique métier ici.
@@ -22,6 +55,7 @@ export async function GET(
   const { searchParams } = new URL(req.url);
   const terminalId = searchParams.get("terminalId");
   const state = ptyManager.getOrCreateSessionState(id);
+  attachCodespace(session, state);
 
   const terminalsList = Array.from(state.terminals.values()).map((t) => ({
     id: t.id,
@@ -33,9 +67,10 @@ export async function GET(
     isRunning: Boolean(t.activeProcess),
     activeCommand: t.activeProcess?.command,
     detectedPort: t.detectedPort,
+    remote: t.remote,
   }));
 
-  const active = terminalId ? state.terminals.get(terminalId) : state.terminals.get(state.activeTerminalId);
+  const active = resolveTerminal(state, terminalId);
 
   return NextResponse.json({
     sessionId: id,
@@ -55,8 +90,11 @@ export async function GET(
           activeCommand: active.activeProcess?.command,
           exitCode: active.exitCode,
           detectedPort: active.detectedPort,
+          remote: active.remote,
         }
       : null,
+    repository: session.repository,
+    codespaceId: session.codespaceId,
   });
 }
 
@@ -74,12 +112,14 @@ export async function POST(
   const body = await req.json().catch(() => ({}));
   const action = body.action || "exec";
   const state = ptyManager.getOrCreateSessionState(id);
-  const terminalId = body.terminalId || state.activeTerminalId;
+  attachCodespace(session, state);
+  const terminalId = resolveTerminal(state, body.terminalId)?.id || state.activeTerminalId;
 
   // 1. Create a new terminal tab
   if (action === "create") {
     const shell = body.shell || "/bin/bash";
     const newTerm = ptyManager.createTerminal(id, shell);
+    attachCodespace(session, state);
     return NextResponse.json({
       success: true,
       terminal: {
@@ -137,7 +177,7 @@ export async function POST(
       output: "",
       isError: false,
       cwd:
-        session.providerId === "github-codespaces" && session.codespaceId
+        isCodespace(session)
           ? term?.cwd?.startsWith("/workspaces") ? term.cwd : codespaceWorkdir(session.repository)
           : term?.cwd || session.cwd || `/workspaces/project`,
       gitBranch: term?.gitBranch || session.branch || "main",
@@ -147,19 +187,29 @@ export async function POST(
   }
 
   // GitHub Codespace attached: run the command inside the real codespace
-  if (session.providerId === "github-codespaces" && session.codespaceId) {
+  if (isCodespace(session)) {
     const term = state.terminals.get(terminalId);
     const startCwd =
       term?.cwd && term.cwd.startsWith("/workspaces") ? term.cwd : codespaceWorkdir(session.repository);
     const result = await execInCodespace({
-      codespaceName: session.codespaceId,
+      codespaceName: session.codespaceId!,
       command,
       cwd: startCwd,
       sessionId: id,
+      timeoutMs: 120_000,
     });
-    if (term) term.cwd = result.cwd;
+    const output = result.output ? result.output.replace(/\r?\n/g, "\r\n") + "\r\n" : "";
+    if (term) {
+      term.cwd = result.cwd;
+      term.exitCode = result.exitCode;
+      term.history.push(command);
+      // Persist command + real output in the terminal buffer so the UI shows it.
+      term.buffer +=
+        `\x1b[32m${term.title}@codespace\x1b[0m \x1b[34m${startCwd}\x1b[0m $ ${command}\r\n` +
+        (result.isError ? `\x1b[31m${output}\x1b[0m` : output);
+    }
     return NextResponse.json({
-      output: result.output.replace(/\n/g, "\r\n") + (result.output ? "\r\n" : ""),
+      output,
       isError: result.isError,
       cwd: result.cwd,
       exitCode: result.exitCode,

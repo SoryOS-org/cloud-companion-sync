@@ -54,6 +54,7 @@ interface TerminalData {
   activeCommand?: string;
   exitCode: number | null;
   detectedPort?: number;
+  remote?: string;
 }
 
 /**
@@ -147,6 +148,7 @@ export function Terminal({ sessionId, providerId = "github-codespaces", onPortDe
   const [activeTabId, setActiveTabId] = useState<string>("terminal-1");
   const [activeTerminal, setActiveTerminal] = useState<TerminalData | null>(null);
   const [input, setInput] = useState("");
+  const [repository, setRepository] = useState<string | null>(null);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
   const [localHistory, setLocalHistory] = useState<string[]>([]);
   const [executing, setExecuting] = useState(false);
@@ -175,8 +177,11 @@ export function Terminal({ sessionId, providerId = "github-codespaces", onPortDe
       if (data.terminals) {
         setTabs(data.terminals);
       }
+      if (data.repository) setRepository(data.repository);
       if (data.activeTerminal) {
         setActiveTerminal(data.activeTerminal);
+        // Keep the UI tab id in sync with the server's real terminal id.
+        if (data.activeTerminal.id !== activeTabId) setActiveTabId(data.activeTerminal.id);
         if (data.activeTerminal.history) {
           setLocalHistory(data.activeTerminal.history);
         }
@@ -290,11 +295,9 @@ export function Terminal({ sessionId, providerId = "github-codespaces", onPortDe
     setLocalHistory((prev) => [...prev, trimmed]);
     setExecuting(true);
 
-    // Optimistically show prompt and command in buffer
-    const promptLine = `\x1b[32muser@codespace\x1b[0m \x1b[38;2;198;98;63m➜\x1b[0m \x1b[34m${activeTerminal?.cwd || "/workspaces/project"}\x1b[0m \x1b[33m(${activeTerminal?.gitBranch || "main"})\x1b[0m \x1b[1;37m$\x1b[0m ${trimmed}\r\n`;
-
+    // Show the command immediately; the server appends the real output to the buffer.
     setActiveTerminal((prev) =>
-      prev ? { ...prev, buffer: (prev.buffer || "") + promptLine } : null
+      prev ? { ...prev, buffer: (prev.buffer || "") + `\x1b[90m… ${trimmed}\x1b[0m\r\n` } : prev
     );
     scrollToBottom();
 
@@ -397,6 +400,9 @@ export function Terminal({ sessionId, providerId = "github-codespaces", onPortDe
   };
 
   const currentTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
+  const isRemote = Boolean(activeTerminal?.remote);
+  const projectName = (repository || "").split("/").pop() || "";
+  const promptUser = isRemote ? `${projectName || "user"}@codespace` : "user@local";
   const currentCwd = activeTerminal?.cwd || currentTab?.cwd || "/workspaces/project";
   const currentBranch = activeTerminal?.gitBranch || currentTab?.gitBranch || "main";
   const isDirty = (activeTerminal?.gitStatus || currentTab?.gitStatus) === "modified";
@@ -579,7 +585,7 @@ export function Terminal({ sessionId, providerId = "github-codespaces", onPortDe
         <div className="flex items-center gap-1.5 pt-1 text-[var(--terminal-foreground)] flex-wrap sm:flex-nowrap">
           {/* Shell Prompt: user@codespace ➜ /workspaces/project (main) $ */}
           <div className="flex items-center gap-1.5 shrink-0 font-bold select-none text-[11px] sm:text-xs">
-            <span className="text-emerald-500 dark:text-emerald-400">user@codespace</span>
+            <span className="text-emerald-500 dark:text-emerald-400">{promptUser}</span>
             <span className="text-[var(--primary)]">➜</span>
             <span className="text-sky-500 dark:text-sky-400 flex items-center gap-1">
               <Folder className="h-3 w-3 inline text-sky-500 dark:text-sky-400" />
