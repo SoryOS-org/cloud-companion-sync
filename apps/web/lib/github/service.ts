@@ -43,9 +43,9 @@ class GitHubService {
         scopes,
       };
 
-      try {
-        credentialManager.saveCredentials("github-codespaces", { apiKey: token }, "user_token");
-      } catch {}
+      // Store globally (no session scope) so every server module that resolves
+      // "github-codespaces" (remote filesystem, codespace exec) finds the token.
+      credentialManager.saveCredentials("github-codespaces", { apiKey: token });
 
       return this.userAccount;
     } catch (err: unknown) {
@@ -57,9 +57,7 @@ class GitHubService {
   disconnectAccount(sessionId: string) {
     this.token = "";
     this.userAccount = { connected: false };
-    try {
-      credentialManager.saveCredentials("github-codespaces", { apiKey: "" }, "user_token");
-    } catch {}
+    credentialManager.deleteCredentials("github-codespaces");
   }
 
   async listRepositories(sessionId: string) {

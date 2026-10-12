@@ -205,6 +205,22 @@ export const PROVIDER_REGISTRY: Record<string, ProviderDefinition> = {
       },
     ],
   },
+  "github-codespaces": {
+    id: "github-codespaces",
+    name: "GitHub",
+    category: "vcs",
+    authenticationMethod: "api_token",
+    description: "Compte GitHub (Personal Access Token classic ou fine-grained) pour dépôts et Codespaces.",
+    fields: [
+      {
+        key: "apiKey",
+        label: "GitHub Personal Access Token",
+        placeholder: "ghp_... ou github_pat_...",
+        type: "password",
+        description: "Scopes requis : repo, codespace, read:user",
+      },
+    ],
+  },
 };
 
 declare global {
@@ -334,6 +350,8 @@ export class CredentialManager {
         return process.env.E2B_API_KEY;
       case "vercel":
         return process.env.VERCEL_TOKEN || process.env.VERCEL_API_TOKEN;
+      case "github-codespaces":
+        return process.env.GITHUB_TOKEN || process.env.GITHUB_PAT;
       default:
         return undefined;
     }
